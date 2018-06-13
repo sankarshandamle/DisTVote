@@ -1,40 +1,45 @@
 pragma solidity ^0.4.0;
 
 contract Vote {
-    
+
+    /* declaration */
+
     struct ManagerData {
-        uint256 deposit;
+        uint256 refundAmt;
         bytes32 EncryptionKey;
         bool exists;
     }
-    
-    //TimeSlots indexed as -> t_start, t_bcr, t_ecr, t_btd, t_etd, t_bvc, t_evc, t_bvt 
-    uint256 [] TimeSlots;
+
+    uint256 [] TimeSlots;  //TimeSlots indexed as -> t_start, t_bcr, t_ecr, t_btd, t_etd, t_bvc, t_evc, t_bvt
     uint256 [] Candidates;
-    bytes32 [] HelpValues;
+    bytes32 [] HelpValues; //not required for testing
     uint256 NoOfVoters;
     uint256 NoOfManagers;
     uint256 SecuirityAmt;
+    uint256 KeyCount=0;
     bool TallyDone=false;
     mapping (address => ManagerData) Managers;
-    
-    //In this we are hashing the name of a voter to an int 
-    bool [] T;
+
+
+    bool [] T; //In this we are hashing the name of a voter to an int; not required
     address []  ManagerList;
     struct VoteCast {
         bool voted_cond;
         bytes32 voted;
     }
-    
+
     mapping (uint256 => VoteCast) VoteBatch;
-    
+
     struct Tokens {
         bytes32 encryption_id;
         uint256 help_value;
     }
-    
+
     mapping (uint256 => Tokens) TokenBatch;
-    
+
+    /* methods */
+
+    //setting up
     function Vote (uint256 x, uint256 n_v, uint256 n_c) public {
         TimeSlots.push(now);
         SecuirityAmt=x;
@@ -46,78 +51,74 @@ contract Vote {
             Candidates[i]=i;
         }
     }
-   
+
+    //Takes a string to generate a voter id i.e., Alice -> uint256
     function AddToken (string s) {
         var temp = VoteBatch[uint256(keccak256(s))];
         temp.voted_cond=true;
     }
-    
+
     //Managers are added if their deposit is greater than the required amount
-    function DepositSecuirity (uint256 val) public {
-        if(val > SecuirityAmt && now < TimeSlots[6]) {
-            var manager=Managers[msg.sender];
-            manager.deposit=val;
-            manager.exists=true;
-            ManagerList.push(msg.sender)-1;
-        }
+    function DepositSecuirity () public payable {
+        require (msg.value > SecuirityAmt && now < TimeSlots[6] && Managers[msg.sender].exists==false);
+        var manager=Managers[msg.sender];
+        manager.refundAmt=msg.value-SecuirityAmt;
+        manager.exists=true;
+        ManagerList.push(msg.sender)-1;
+        //reassign number of managers
         NoOfManagers=ManagerList.length;
     }
-    
+
     // Managers submit their encryption key
     function SubmitEncryptionKey (bytes32 s) public {
-        if (Managers[msg.sender].exists && now < TimeSlots[6]) {
-            Managers[msg.sender].EncryptionKey=s;
-        }
-        
+        require(Managers[msg.sender].exists==true && now < TimeSlots[6]);
+        Managers[msg.sender].EncryptionKey=s;
     }
-    
-    //Give every candidate an EncryptionKey
-    function GetEncryptionKey () public {
-        if (now < TimeSlots[6] && now > TimeSlots[7]) {
-            revert();
-        }
-        for (uint256 i=1; i<=NoOfVoters; i++) {
-            var temp = TokenBatch[i];
-            temp.encryption_id=Managers[ManagerList[i%NoOfManagers]].EncryptionKey;
-            temp.help_value=Random_Generator();
-            HelpValues.push(sha256(temp.help_value));
-           // web3.sha3(web3.toHex(1));
-        }
-        
+
+    //Give every candidate an EncryptionKey; No of managers = no of Keys
+    function GetEncryptionKey () public returns (uint256, bytes32) {
+        require (now < TimeSlots[6] && now > TimeSlots[7]);
+        uint256 temp = KeyCount;
+        bytes32 enKey = Managers[ManagerList[temp]].EncryptionKey;
+        KeyCount=(KeyCount+1)%NoOfManagers;
+        return (temp,enKey);
     }
-    
-    //Every candidate casts his vote
+
+    //Every candidate casts his vote; s is the token eg. "Alice"
     function CastVote (string s, uint256 i, bytes32 ev) {
-        if (now < TimeSlots[6] && now > TimeSlots[7]) {
-            revert();
-        }
-        if (VoteBatch[uint256(keccak256(s))].voted_cond) {
-            VoteBatch[uint256(keccak256(s))].voted_cond=false;
-        }
-        else {
-            revert();
-        }
-        var temp = VoteBatch[uint256(keccak256(s))];
+        require(now < TimeSlots[6] && now > TimeSlots[7]);
+        var temp=VoteBatch[uint256(keccak256(s))];
+        require (temp.voted_cond==true, "Token does not match");
+        temp.voted_cond=false;
         temp.voted=ev;
     }
 
-    //function to tally the votes
-    function TallyVote (uint256 decrpty_vote) {
-        if (now > TimeSlots[8]) {
-            revert();
-        }
+    //function to tally the votes; NoOfManagers is equal to the number of Keys
+    //since Decryption will be done offline, just take the decrypted vote as a parameter for testing
+    function VoteTally (uint256 decrypt_vote) {
+        require(now > TimeSlots[8]);
         if (TallyDone==false) {
-            for (uint256 i=1; i<=ManagerList.length; i++) {
-                Candidates[decrpty_vote]+=1;
+            for (uint256 i=1; i<=NoOfManagers; i++) {
+                Candidates[decrypt_vote]+=1;
             }
         }
     }
-    
-    /* helper function to generate random number */
+
+    //pay the managers for their work
+    function WithdrawReward() external payable  {
+        require(Managers[msg.sender].exists==true && now > TimeSlots[7]);
+        uint256 amt = Managers[msg.sender].refundAmt;
+        Managers[msg.sender].refundAmt=0;
+        if (amt > 0) {
+          msg.sender.transfer(SecuirityAmt + amt);
+        }
+
+    }
+
+    /* helper function to generate random number; not requried for testing */
     function Random_Generator () returns (uint256) {
         uint256 random = now % 255;
         return random;
     }
-    
-}
 
+}
